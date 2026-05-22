@@ -1,0 +1,6 @@
+# shift + alt + F refactors code within a file
+
+BasedOnStyle: Google
+BreakBeforeBraces: Attach
+SortIncludes: false
+ColumnLimit: 0
