@@ -37,7 +37,7 @@ constexpr int ESC_MIN_US = 1000;
 constexpr int ESC_NEUTRAL_US = 1500;
 constexpr int ESC_MAX_US = 2000;
 
-constexpr int LEFT_MOTOR_DIRECTION = 1;
+constexpr int LEFT_MOTOR_DIRECTION = -1;
 constexpr int RIGHT_MOTOR_DIRECTION = 1;
 
 // -------------------- Safety --------------------
@@ -52,6 +52,7 @@ bool watchdog_enabled = false;
 float yaw = 0.0f;
 float forward = 0.0f;
 float magnet = 0.0f;
+constexpr float max_turn = 0.35;
 bool flip = false;
 
 // -------------------- LED animation --------------------
@@ -107,7 +108,7 @@ void onLinkStatisticsUpdate(
 void updateCRSF() {
   crsf.update();
 
-  yaw = powerCurve(servoToFloat(crsf.rcToUs(crsf.getChannel(YAW_CH)), true), 3);
+  yaw = powerCurve(servoToFloat(crsf.rcToUs(crsf.getChannel(YAW_CH)), true), 3) * max_turn;
 
   forward = powerCurve(servoToFloat(crsf.rcToUs(crsf.getChannel(FWD_CH)), true), 3);
 
@@ -134,6 +135,9 @@ void updateWatchdog() {
 
 // -------------------- Motor + Magnet Control --------------------
 void commandOutputs() {
+  if (flip) {
+    forward = -forward;
+  }
   float left = forward + yaw;
   float right = forward - yaw;
 
@@ -159,6 +163,7 @@ void commandOutputs() {
   motorRight.writeMicroseconds(
       floatToServoUs(right * RIGHT_MOTOR_DIRECTION));
 
+  //   Serial.println(floatToServoUs(left * LEFT_MOTOR_DIRECTION));
   analogWrite(
       MAGNET_ENABLE_PIN,
       int(constrain(magnet, 0.0f, 1.0f) * 255.0f));
@@ -215,7 +220,7 @@ void updateLEDs() {
 
   // two dots, 18 LEDs apart in virtual space
   int posA = int(ledPos) % LOGICAL_NUM_LEDS;
-  int posB = int(ledPos + LOGICAL_NUM_LEDS/2) % LOGICAL_NUM_LEDS;
+  int posB = int(ledPos + LOGICAL_NUM_LEDS / 2) % LOGICAL_NUM_LEDS;
 
   leds[posA] = colour;
   leds[posB] = colour;
