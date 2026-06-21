@@ -2,6 +2,10 @@
 #include <Servo.h>
 #include <FastLED.h>
 #include <CRSFforArduino.hpp>
+#include <math.h>
+
+float x = INFINITY;
+float y = -INFINITY;
 
 extern "C" {
 #include "hardware/watchdog.h"
@@ -25,6 +29,7 @@ CRSFforArduino crsf = CRSFforArduino(&Serial1);
 constexpr uint8_t YAW_CH = 1;
 constexpr uint8_t FWD_CH = 2;
 constexpr uint8_t MAGNET_CH = 3;
+constexpr uint8_t TRACTC_CH = 8;
 constexpr uint8_t FLIP_CH = 5;
 
 bool link_active = false;
@@ -52,7 +57,15 @@ bool watchdog_enabled = false;
 float yaw = 0.0f;
 float forward = 0.0f;
 float magnet = 0.0f;
-constexpr float max_turn = 0.35;
+constexpr float max_turn = 0.3;
+
+// accel time sets max accel from 0 speed to max speed forwards
+constexpr float accel_time_slow = 0.6;
+constexpr float accel_time_med = 0.3;
+constexpr float accel_rate_slow = 1.0f / accel_time_slow;  // stores portions of 0-1 per second
+constexpr float accel_rate_med = 1.0f / accel_time_med;
+constexpr float accel_rate_fast = INFINITY;
+float accel_rate = accel_rate_fast;
 bool flip = false;
 
 // -------------------- LED animation --------------------
@@ -115,6 +128,16 @@ void updateCRSF() {
   magnet = servoToFloat(crsf.rcToUs(crsf.getChannel(MAGNET_CH)), false);
 
   flip = crsf.rcToUs(crsf.getChannel(FLIP_CH)) < 1500;  // flip direction of motors if enable switch is flipped
+
+  int tractc_switch = crsf.rcToUs(crsf.getChannel(TRACTC_CH));
+
+  if (tractc_switch < 1300) {
+    accel_rate = accel_rate_slow;
+  } else if (tractc_switch < 1700) {
+    accel_rate = accel_rate_med;
+  } else {
+    accel_rate = accel_rate_fast;
+  }
 }
 
 // -------------------- Watchdog --------------------
@@ -135,11 +158,26 @@ void updateWatchdog() {
 
 // -------------------- Motor + Magnet Control --------------------
 void commandOutputs() {
-  if (flip) {
-    forward = -forward;
+  static float forward_now = 0;
+
+  // traction control
+  static uint32_t then = 0;
+  uint32_t now = micros();
+  uint32_t time_step = now - then;
+  then = now;
+  float max_throt_step = time_step * accel_rate / 1000000;
+
+  if (forward_now < 0) {
+    forward_now = forward;
+  } else {
+    forward_now = min(forward, forward_now + max_throt_step);  // intentionally only limits positive forward acceleration
   }
-  float left = forward + yaw;
-  float right = forward - yaw;
+
+  // flip direction if commanded
+  float commanded_forward = flip ? -forward_now : forward_now;
+
+  float left = commanded_forward + yaw;
+  float right = commanded_forward - yaw;
 
   // prevent saturation
   float maxMag = max(fabs(left), fabs(right));
