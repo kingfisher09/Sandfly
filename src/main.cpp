@@ -14,11 +14,12 @@ extern "C" {
 // -------------------- Pins --------------------
 constexpr uint8_t MOTOR_LEFT_PIN = 3;
 constexpr uint8_t MOTOR_RIGHT_PIN = 4;
-constexpr uint8_t MAGNET_ENABLE_PIN = 2;
+constexpr uint8_t SERVO_LEFT_PIN = 2;
+constexpr uint8_t SERVO_RIGHT_PIN = 26;
 constexpr uint8_t LED_PIN = 27;
 
 // -------------------- LEDs --------------------
-constexpr uint8_t LOGICAL_NUM_LEDS = 36;  // note this is double the real number so the blur works
+constexpr uint8_t LOGICAL_NUM_LEDS = 24;  // note this is double the real number so the blur works
 constexpr uint8_t LED_BRIGHTNESS = 255;
 
 CRGB leds[LOGICAL_NUM_LEDS];
@@ -28,16 +29,13 @@ CRSFforArduino crsf = CRSFforArduino(&Serial1);
 
 constexpr uint8_t YAW_CH = 1;
 constexpr uint8_t FWD_CH = 2;
-constexpr uint8_t MAGNET_CH = 3;
+constexpr uint8_t LIFT_CH = 3;
 constexpr uint8_t TRACTC_CH = 8;
 constexpr uint8_t FLIP_CH = 5;
 
 bool link_active = false;
 
 // -------------------- ESCs --------------------
-Servo motorLeft;
-Servo motorRight;
-
 constexpr int ESC_MIN_US = 1000;
 constexpr int ESC_NEUTRAL_US = 1500;
 constexpr int ESC_MAX_US = 2000;
@@ -56,7 +54,7 @@ bool watchdog_enabled = false;
 // -------------------- Control values --------------------
 float yaw = 0.0f;
 float forward = 0.0f;
-float magnet = 0.0f;
+float lift = 0.0f;
 constexpr float max_turn = 0.3;
 
 // accel time sets max accel from 0 speed to max speed forwards
@@ -67,6 +65,19 @@ constexpr float accel_rate_med = 1.0f / accel_time_med;
 constexpr float accel_rate_fast = INFINITY;
 float accel_rate = accel_rate_fast;
 bool flip = false;
+
+// -------------------- Servo --------------------
+Servo motorLeft;
+Servo motorRight;
+Servo liftLeft;
+Servo liftRight;
+
+// Begin with conservative limits, then expand them carefully.
+constexpr int LIFT_LEFT_LOWERED_US = 1200;
+constexpr int LIFT_LEFT_RAISED_US = 1900;
+
+constexpr int LIFT_RIGHT_LOWERED_US = 1800;
+constexpr int LIFT_RIGHT_RAISED_US = 1100;
 
 // -------------------- LED animation --------------------
 float ledPos = 0.0f;
@@ -87,6 +98,18 @@ float servoToFloat(float servoSignal, bool centred) {
   servoSignal = (servoSignal <= 1000 + deadzone) ? 1000 : servoSignal;
 
   return constrain((servoSignal - 1000.0f) / 1000.0f, 0.0f, 1.0f);
+}
+
+int liftToServoUs(
+    float liftPosition,
+    int loweredUs,
+    int raisedUs) {
+  liftPosition = constrain(liftPosition, 0.0f, 1.0f);
+
+  return int(
+      roundf(
+          loweredUs +
+          liftPosition * (raisedUs - loweredUs)));
 }
 
 float powerCurve(float value, float power) {
@@ -125,7 +148,7 @@ void updateCRSF() {
 
   forward = powerCurve(servoToFloat(crsf.rcToUs(crsf.getChannel(FWD_CH)), true), 3);
 
-  magnet = servoToFloat(crsf.rcToUs(crsf.getChannel(MAGNET_CH)), false);
+  lift = servoToFloat(crsf.rcToUs(crsf.getChannel(LIFT_CH)), false);
 
   flip = crsf.rcToUs(crsf.getChannel(FLIP_CH)) < 1500;  // flip direction of motors if enable switch is flipped
 
@@ -192,7 +215,7 @@ void commandOutputs() {
   if (!linkHealthy()) {
     left = 0.0f;
     right = 0.0f;
-    magnet = 0.0f;
+    lift = 0.0f;
   }
 
   motorLeft.writeMicroseconds(
@@ -202,9 +225,17 @@ void commandOutputs() {
       floatToServoUs(right * RIGHT_MOTOR_DIRECTION));
 
   //   Serial.println(floatToServoUs(left * LEFT_MOTOR_DIRECTION));
-  analogWrite(
-      MAGNET_ENABLE_PIN,
-      int(constrain(magnet, 0.0f, 1.0f) * 255.0f));
+  liftLeft.writeMicroseconds(
+      liftToServoUs(
+          lift,
+          LIFT_LEFT_LOWERED_US,
+          LIFT_LEFT_RAISED_US));
+
+  liftRight.writeMicroseconds(
+      liftToServoUs(
+          lift,
+          LIFT_RIGHT_LOWERED_US,
+          LIFT_RIGHT_RAISED_US));
 }
 
 // -------------------- LED Animation --------------------
@@ -250,11 +281,11 @@ void updateLEDs() {
   while (ledPos >= LOGICAL_NUM_LEDS) ledPos -= LOGICAL_NUM_LEDS;
   while (ledPos < 0) ledPos += LOGICAL_NUM_LEDS;
 
-  // white -> red with magnet strength
+  // white -> red with lift height
   CRGB colour = blend(
       CRGB::White,
       CRGB::Red,
-      uint8_t(magnet * 255.0f));
+      uint8_t(lift * 255.0f));
 
   // two dots, 18 LEDs apart in virtual space
   int posA = int(ledPos) % LOGICAL_NUM_LEDS;
@@ -300,9 +331,12 @@ void setup() {
   motorLeft.writeMicroseconds(ESC_NEUTRAL_US);
   motorRight.writeMicroseconds(ESC_NEUTRAL_US);
 
-  // magnet
-  pinMode(MAGNET_ENABLE_PIN, OUTPUT);
-  analogWrite(MAGNET_ENABLE_PIN, 0);
+  // servo attach
+  liftLeft.attach(SERVO_LEFT_PIN, 500, 2500);
+  liftRight.attach(SERVO_RIGHT_PIN, 500, 2500);
+
+  liftLeft.writeMicroseconds(LIFT_LEFT_LOWERED_US);
+  liftRight.writeMicroseconds(LIFT_RIGHT_LOWERED_US);
 
   // LEDs
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, LOGICAL_NUM_LEDS);
